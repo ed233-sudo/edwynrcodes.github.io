@@ -1,0 +1,275 @@
+#Lattice design
+#Import, and inspect the data
+# YLDkgplot, BLB and BLAST removed from the data
+eddy <- read.csv("rice_varieties.csv", header = T)
+head(eddy)
+eddy <- eddy[,-2]
+eddy <- as.data.frame(eddy)
+eddy$trt <- as.factor(eddy$trt)
+eddy$rep <- as.factor(eddy$rep)
+eddy$block <- as.factor(eddy$block)
+str(eddy, give.attr=F)
+Y <- as.double(eddy[,4])
+
+# Load agricolae package
+library(agricolae)
+
+#Using the Partially Balanced Incomplete Block PBIB.test() function...
+#USAGE:
+#PBIB.test(block,trt,replication,y,k, test = c("lsd","tukey"), alpha=0.05, console=FALSE)
+ed<- ed[,-2]
+
+
+attach(eddy)
+Y <- as.double(eddy[,4])
+Y
+mod.i <- PBIB.test(block, trt, rep, Y, k=5, test="tukey")
+mod.i$ANOVA
+bar.group(mod.i$groups,col="blue",density=4,ylim=c(0,max(Y)))
+bar
+rm(y,block,trt,out)
+
+
+detach(eddy)
+
+# Extract Adjusted Geno DF,SS, MS, Fcal & p value
+mod.i$ANOVA$Df[1] # Geno DF
+mod.i$ANOVA$`Sum Sq`[1] # Geno.Adj.SS
+mod.i$ANOVA$`Mean Sq`[1] # Geno.Adj.MS
+mod.i$ANOVA$`F value`[1]
+mod.i$ANOVA$`Pr(>F)`[1] # p value for Geno
+
+# Ee
+mod.i$ANOVA$Df[2]
+mod.i$ANOVA$`Mean Sq`[2] # Ee
+
+# Adjusted Genotype means
+mod.i$means
+mod.i$means$Y.adj
+mod.i$groups
+mod.i$comparison
+# cv and Efficiency
+mod.i$statistics
+mod.i$statistics$CV
+mod.i$statistics$Efficiency
+
+# PBIB.test() does not report Eb, so just run the lm() without 
+# worrying about adjustments on the treatments:
+
+A <- as.matrix(anova(lm(Y~trt+rep/block,eddy)))
+A
+
+A[1,2]# Geno.Unadj.SS
+
+A[3,1] # Eb DF
+A[3,3] # Eb MS
+
+# If Eb > Ee, the use of the triple lattice analysis is warranted.
+
+## Putting everything together in a function 
+## Two data matrices are required; the trait matrix (all numeric)
+### and the factor matrix (i.e genotype, block, and rep)
+### In the function below, x = trait matrix & y = factor matrix
+### Note that In the factor matrix, genotype must be column 1,
+### block must be column 2, and rep must be column 3
+### The name of the function is LATANOVA
+
+LATANOVA <- function(x,y){
+  
+  trt <- as.factor(y[,1])
+  block <- as.factor(y[,2])
+  rep <- as.factor(y[,3])
+  
+  # Create output table and list objects
+  n <- ncol(x)
+  c.mat <- matrix(NA, nrow=n, ncol=12)# For ANOVA summaries
+  ANOVA.Table <- list()
+  Means <- list()
+  Groups <- list()
+  
+  require(agricolae)
+  
+  # Loop to run triple lattice anova for all traits
+  for (i in 1:n) {
+    Y <- as.double(x[,i]) # Subset each trait for ANOVA
+    # Triple lattice ANOVA models using PBIB.test and lm
+    # Replace tukey with lsd if you want lsd mean separation
+    mod.i <- PBIB.test(block, trt, rep, Y, k=5, test="tukey")
+    A <- as.matrix(anova(lm(Y~trt+rep/block)))
+
+    ## Extract parameters from PBIB.test ANOVA table
+    Geno.DF <- mod.i$ANOVA$Df[1] # Genotype DF
+    Geno.Unadj.SS <- A[1,2]# Genotype Unadjusted SS
+    Geno.Adj.SS <- mod.i$ANOVA$`Sum Sq`[1] # Genotype Adjusted SS
+    Geno.Adj.MS <- mod.i$ANOVA$`Mean Sq`[1] # Genotype Adjusted MS
+    
+    # block within rep -- Eb from lm ANOVA table
+    Eb.DF <- A[3,1] # block within rep DF
+    Eb <- A[3,3] # block within rep MS
+    
+    # Residual -- Ee from PBIB.test ANOVA table
+    Ee.DF <- mod.i$ANOVA$Df[2] # Ee DF
+    Ee <-  mod.i$ANOVA$`Mean Sq`[2] # Ee MS
+    
+    Fcal <- mod.i$ANOVA$`F value`[1] # Geno Fcal
+    pvalue <- mod.i$ANOVA$`Pr(>F)`[1] # pvalue for Geno
+    
+    CV <- mod.i$statistics$CV # CV
+    Eff <- mod.i$statistics$Efficiency # relative efficiency
+    
+    # Combine all extracted parameters into a data matrix
+    b1 <- cbind(Geno.DF,Geno.Unadj.SS,Geno.Adj.SS,Geno.Adj.MS,
+                Eb.DF,Eb,Ee.DF,Ee,Fcal,pvalue,CV, Eff) 
+    
+    c.mat[i,] <- b1 # Fill empty matrix with results.
+    
+    ANOVA.Table[i] <- list(mod.i$ANOVA) # ANOVA for each trait
+    Means[i] <- list(mod.i$means$Y.adj) # Adjusted means
+    Groups[i] <- list(mod.i$groups) # Tukey mean separation
+   }
+  signif <- symnum(c.mat[,10], corr = FALSE,
+            cutpoints = c(0,.001,.01,.05,.1, 1),
+            symbols = c("***","**","*","NS","NSS"))#Assign signif to p values
+  rownames(c.mat) <- colnames(x)
+  colnames(c.mat) <- colnames(b1)
+  c.mat <- round(c.mat,4)
+  c.mat <- data.frame(c.mat,signif)
+  
+  names(ANOVA.Table) <- colnames(x)
+  
+  names(Means) <- colnames(x)
+  Means <- round(as.data.frame(Means),2)
+  rownames(Means) <- levels(trt)
+  
+  names(Groups) <- colnames(x)
+  
+  Results <- list(c.mat,ANOVA.Table, Means,Groups)
+  Results
+}
+
+## Test new function using your data
+# factor matrix (y) starts from column 1 - 3
+# trait matrix (x) starts from column 4 - 21)
+
+Trait <- sapply(eddy[,c(4:21)],as.numeric)
+Trait <- as.data.frame(Trait)
+Trait <- sapply(eddy[,c(4:5)],as.numeric)
+
+
+Fac <- eddy[,c(1:3)]
+Fac
+
+# Use LATANOVA function on your data
+anova.sum <- LATANOVA(Trait,Fac)
+
+# View and save results in your working directory
+anova.sum[1] # summarized ANOVA Table for all traits
+write.csv(anova.sum[1],file ="ANOVA.Summary_acrossloc1a.csv")# save table
+
+anova.sum[2] # Individual ANOVA Table for each trait
+capture.output(anova.sum[2],file = "Individual.ANOVA2_acrossloc1a.txt")# Save output
+
+anova.sum[3] # Adjusted mean for each trait
+write.csv(anova.sum[3],file ="Adjusted.Genotyp.Means_acrossloc1a.csv")# save table
+
+anova.sum[4] # Tukey mean separation using adjusted means for each trait
+capture.output(anova.sum[4],file ="Tukey.Mean.Separations_acrossloc1a.txt")# save output
+
+
+q<- as.matrix(anova.sum[1]) 
+anova.sum[1][1,1]
+q[1,1]
+
+######################## NOTE ##############################
+## Use the adjusted Genotype means to estimate genetic gain.
+## Create a new dataset using the adjusted means for the genotypes
+## and the year of release to fit the regression model 
+## Create a function to do this for all traits
+## Your function should return the slope, p values
+## R squared for each trait. See the LATANOVA function for clues
+
+# Set working directory
+# import adjusted means and Year of release dataset
+GG <- read.csv("mean_means3.csv", header = T)
+GG
+
+# Fitting simple linear reg for one trait
+Year <- GG[,2] # subset Column 2
+Year
+
+Y <- GG[,3] # subset Yield(t/ha)
+Y
+
+# Regress yield on year of release
+reg1 <- lm(Y~Year)
+summary(reg1)
+
+# R squared
+summary(reg1)$r.squared
+
+slope <- coef(reg1)[2]
+slope
+
+# p values for slope
+coef(summary(reg1))[, "Pr(>|t|)"][2]
+
+# Plot
+plot(Y~Year, pch=16)
+abline(reg1, col="blue", lty=2, lwd=2)
+
+# Creating a function to return results for all traits
+GGain <- function(x,y){
+  
+  year <- as.double(y)
+  
+  # Create output table and list objects
+  n <- ncol(x)
+  c.mat <- matrix(NA, nrow=n, ncol=3)
+  
+  # Loop to run simple linear reg for all traits
+  for (i in 1:n) {
+    Y <- as.double(x[,i]) # Subset each trait
+    reg1 <- lm(Y~year)
+    
+    ## Extract parameters model output
+    # Slope
+    slope <- coef(reg1)[2]
+    
+    # R squared
+    R.squared <- summary(reg1)$r.squared
+    
+    # p values for slope
+    Pval <- coef(summary(reg1))[,"Pr(>|t|)"][2]
+    
+    # Combine all extracted parameters into a data matrix
+    b1 <- cbind(slope,R.squared,Pval) 
+    
+    c.mat[i,] <- b1 # Fill empty matrix with results.
+    
+    # Plots
+    plot(Y~year, pch=16, main= paste("Genetic Gain for", names(x)[i]),
+         ylab = names(x)[i], xlab= "Year", ylim=c(min(Y),max(Y)))
+    abline(reg1, col="blue", lty=2, lwd=2)
+  }
+  signif <- symnum(c.mat[,3], corr = FALSE,
+                   cutpoints = c(0,.001,.01,.05,.1, 1),
+                   symbols = c("***","**","*","NS","NSS"))#Assign signif to p values
+  rownames(c.mat) <- colnames(x)
+  colnames(c.mat) <- colnames(b1)
+  c.mat <- round(c.mat,4)
+  c.mat <- data.frame(c.mat,signif)
+  c.mat
+}
+
+# Test GGain function
+Year <- GG[,2] # Year of release is column 2
+Year
+
+# Traits start from column 3 to 20
+Trait2 <- GG[,c(3:20)]
+Trait2
+
+G <- GGain(Trait2,Year)
+G
+
+write.csv(G, file = "Genetic.Gain2acrosslocations1ab.csv")
